@@ -12,8 +12,22 @@
 #define BUFFER_SIZE 1024 // Number of bytes in the message receive buffer; 1 kilobyte for conventionalness (kibibyte? I dunno)
 
 
+std::string trimString(std::string str){ // Removes whitespace from the start and end of a string. Whitespace is ' ', '\n', '\r', and a few others. So a string like "   hello world   " would become "hello world".
+    int trimStart;
+    int trimEnd;
+    for (trimStart = 0; std::isspace(str[trimStart]) && trimStart < str.size(); trimStart ++);
+    for (trimEnd = str.size() - 1; std::isspace(str[trimEnd]) && trimEnd >= 0; trimEnd --);
+    return str.substr(trimStart, trimEnd - trimStart + 1);
+}
+
+
 struct Client{ // Add more things to this later; for now it just holds the socket
     int sock; // All sockets are numbers, because they're file descriptors. Descriptor 0 is stdout, descriptor 1 is stdin, sockets are added after that. The server is probably descriptor 2.
+    void send(std::string data){
+        // :: means global scope
+        ::send(sock, data.c_str(), data.size(), 0); // Socket to send data on, the std::string's core char*, the size of the std::string, and 0 for flags
+    }
+    std::string linebuffer; // Buffer a line from the socket
 };
 
 
@@ -59,14 +73,25 @@ void gracefullyClose(Client* cli){ // Close a socket and delete the client
 }
 
 
-void gotMessage(Client* cli, std::string message){ // Successfully read a proper message from the attached client
-    std::cout << "Client " << cli -> sock << " got a message: " << message << std::endl;
+void gotLine(Client* cli, std::string line){
+    std::cout << "Got line from client id#" << cli -> sock << ": " << line << std::endl;
+}
+
+
+void gotByte(Client* cli, char byte){ // Successfully read a byte from the attached client
+    // Because we're using TCP this is a more logical solution than message handling - TCP is stream based, so this forces us to make no assumptions about how complete the data we've received is
+    if (byte == '\n'){ // If we've received a newline
+        gotLine(cli, trimString(cli -> linebuffer));
+        cli -> linebuffer = ""; // Potential memory leak, but probably not
+    }
+    else{
+        cli -> linebuffer += byte;
+    }
 }
 
 
 void handleMessage(Client* cli){ // Handle a message received from a client
     char buf[BUFFER_SIZE + 1]; // A statically allocated buffer of BUFFER_SIZE + 1 bytes: this is to preserve the null terminating character at the end of the string
-    std::string message; // Proper std::string of the message
     while (true){ // Infinite loop. You'll see.
         memset(buf, 0, BUFFER_SIZE + 1); // Set every byte in the buffer to 0
         int ret = recv(cli -> sock, buf, BUFFER_SIZE, 0); // Socket to read from, buffer (a pointer to load data into), amount to read, flags (flags of 0 = nothin')
@@ -75,12 +100,13 @@ void handleMessage(Client* cli){ // Handle a message received from a client
             gracefullyClose(cli); // Call that function from earlier
             return; // End the function - we don't want to waste time processing data from a closed client. THIS MAY LEAD TO BUGS!
         }
-        message += buf; // Append the buffer to the proper string
-        if (ret < BUFFER_SIZE){ // recv returns either -1 (error; usually just means "no data" if you're using nonblocking sockets, which we are)
+        for (int i = 0; i < ret; i ++){ // recv returns the length of the data it loaded to the buffer
+            gotByte(cli, buf[i]); // Call our function on bytes received; this enforces the stream based paradigm
+        }
+        if (ret < BUFFER_SIZE){ // recv returns either -1 (error; usually just means "no data" if you're using nonblocking sockets, which we are), 0 (meaning the socket is disconnected), or the number of bytes it's read from the client
             break; // Message fully received - exit the pull loop
         }
     }
-    gotMessage(cli, message); // Fully got a message from a client. Call the nice happy function.
 }
 
 
