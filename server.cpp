@@ -16,7 +16,7 @@ std::string trimString(std::string str){ // Removes whitespace from the start an
     int trimStart;
     int trimEnd;
     for (trimStart = 0; std::isspace(str[trimStart]) && trimStart < str.size(); trimStart ++);
-    for (trimEnd = str.size() - 1; std::isspace(str[trimEnd]) && trimEnd >= 0; trimEnd --);
+    for (trimEnd = str.size() - 1; std::isspace(str[trimEnd]) && trimEnd > 0; trimEnd --);
     return str.substr(trimStart, trimEnd - trimStart + 1);
 }
 
@@ -28,6 +28,10 @@ struct Client{ // Add more things to this later; for now it just holds the socke
         ::send(sock, data.c_str(), data.size(), 0); // Socket to send data on, the std::string's core char*, the size of the std::string, and 0 for flags
     }
     std::string linebuffer; // Buffer a line from the socket
+
+    std::string name;
+
+    bool isLoggedIn = false;
 };
 
 
@@ -74,15 +78,37 @@ void gracefullyClose(Client* cli){ // Close a socket and delete the client
 
 
 void gotLine(Client* cli, std::string line){
-    std::cout << "Got line from client id#" << cli -> sock << ": " << line << std::endl;
+    if (cli -> isLoggedIn){
+        for (const auto& pair : clients){
+            if (pair.second != cli){
+                pair.second -> send(cli -> name);
+                pair.second -> send(": ");
+                pair.second -> send(line);
+                pair.second -> send("\n");
+            }
+        }
+    }
+    else{
+        cli -> isLoggedIn = true;
+        cli -> name = line;
+        for (const auto& pair : clients){
+            pair.second -> send(cli -> name);
+            pair.second -> send(" has joined the chatroom.\n");
+        }
+    }
 }
 
 
 void gotByte(Client* cli, char byte){ // Successfully read a byte from the attached client
     // Because we're using TCP this is a more logical solution than message handling - TCP is stream based, so this forces us to make no assumptions about how complete the data we've received is
     if (byte == '\n'){ // If we've received a newline
-        gotLine(cli, trimString(cli -> linebuffer));
-        cli -> linebuffer = ""; // Potential memory leak, but probably not
+        if (cli -> linebuffer.size() > 0){
+            std::string stripped = trimString(cli -> linebuffer);
+            cli -> linebuffer.clear(); // Empty the line buffer
+            if (stripped.size() > 0){
+                gotLine(cli, stripped);
+            }
+        }
     }
     else{
         cli -> linebuffer += byte;
@@ -107,6 +133,11 @@ void handleMessage(Client* cli){ // Handle a message received from a client
             break; // Message fully received - exit the pull loop
         }
     }
+}
+
+
+void clientConnected(Client* cli){
+    cli -> send("Your name: ");
 }
 
 
@@ -150,6 +181,7 @@ int main(){
                 clients[client] = new Client {client}; // Create a new client and slap it in the map
                 deblock(client); // Configure the socket to be nonblocking; nonblocking is always a good idea even if you're using poll or select
                 regenFDs(); // Regenerate the FD set from the modified map
+                clientConnected(clients[client]);
             }
         }
         for (int i = 0; i < clients.size(); i ++){
