@@ -21,6 +21,9 @@ std::string trimString(std::string str){ // Removes whitespace from the start an
 }
 
 
+struct AppMetadata;
+
+
 struct Client{ // Add more things to this later; for now it just holds the socket
     int sock; // All sockets are numbers, because they're file descriptors. Descriptor 0 is stdout, descriptor 1 is stdin, sockets are added after that. The server is probably descriptor 2.
     void send(std::string data){
@@ -29,9 +32,11 @@ struct Client{ // Add more things to this later; for now it just holds the socke
     }
     std::string linebuffer; // Buffer a line from the socket
 
-    std::string name;
+    AppMetadata* metadata;
 
-    bool isLoggedIn = false;
+    ~Client(){
+        free(metadata);
+    }
 };
 
 
@@ -77,26 +82,8 @@ void gracefullyClose(Client* cli){ // Close a socket and delete the client
 }
 
 
-void gotLine(Client* cli, std::string line){
-    if (cli -> isLoggedIn){
-        for (const auto& pair : clients){
-            if (pair.second != cli){
-                pair.second -> send(cli -> name);
-                pair.second -> send(": ");
-                pair.second -> send(line);
-                pair.second -> send("\n");
-            }
-        }
-    }
-    else{
-        cli -> isLoggedIn = true;
-        cli -> name = line;
-        for (const auto& pair : clients){
-            pair.second -> send(cli -> name);
-            pair.second -> send(" has joined the chatroom.\n");
-        }
-    }
-}
+
+#include "app.hpp" // Include application functions
 
 
 void gotByte(Client* cli, char byte){ // Successfully read a byte from the attached client
@@ -133,11 +120,6 @@ void handleMessage(Client* cli){ // Handle a message received from a client
             break; // Message fully received - exit the pull loop
         }
     }
-}
-
-
-void clientConnected(Client* cli){
-    cli -> send("Your name: ");
 }
 
 
@@ -181,6 +163,7 @@ int main(){
                 clients[client] = new Client {client}; // Create a new client and slap it in the map
                 deblock(client); // Configure the socket to be nonblocking; nonblocking is always a good idea even if you're using poll or select
                 regenFDs(); // Regenerate the FD set from the modified map
+                clients[client] -> metadata = new AppMetadata;
                 clientConnected(clients[client]);
             }
         }
